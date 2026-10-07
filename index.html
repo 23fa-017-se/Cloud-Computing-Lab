@@ -231,60 +231,77 @@
     </div>
 
     <script>
-        // Initial Mock Data Structure
-        const defaultProducts = [
-            {
-                id: '1',
-                title: 'Minimalist Watch',
-                category: 'Accessories',
-                price: 129.99,
-                stock: 12,
-                image: 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=500&q=80'
-            },
-            {
-                id: '2',
-                title: 'Wireless Earbuds Pro',
-                category: 'Electronics',
-                price: 89.50,
-                stock: 25,
-                image: 'https://images.unsplash.com/photo-1590658268037-6bf12165a8df?w=500&q=80'
-            },
-            {
-                id: '3',
-                title: 'Classic Leather Jacket',
-                category: 'Apparel',
-                price: 199.00,
-                stock: 8,
-                image: 'https://images.unsplash.com/photo-1551028719-00167b16eac5?w=500&q=80'
-            },
-            {
-                id: '4',
-                title: 'Smart Fitness Tracker',
-                category: 'Electronics',
-                price: 49.99,
-                stock: 30,
-                image: 'https://images.unsplash.com/photo-1575311373937-040b8e1fd5b6?w=500&q=80'
-            }
-        ];
-
         // Central Application State
-        let products = JSON.parse(localStorage.getItem('ch_products')) || defaultProducts;
+        // Products and inventory live in the Netlify Database (via /api); the cart stays in the browser.
+        let products = [];
         let cart = JSON.parse(localStorage.getItem('ch_cart')) || [];
         let activeCategory = 'all';
+        let productsLoaded = false;
+        let productsError = null;
 
         // Initialize App
         window.addEventListener('DOMContentLoaded', () => {
+            renderStorefront();
+            renderAdminTable();
+            updateCartUI();
+            loadProducts();
+        });
+
+        // --- API ---
+        async function apiRequest(path, options = {}) {
+            let res;
+            try {
+                res = await fetch(path, {
+                    ...options,
+                    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }
+                });
+            } catch (err) {
+                throw new Error("Unable to reach the server. Please check your connection and try again.");
+            }
+            const data = await res.json().catch(() => null);
+            if (!res.ok) {
+                throw new Error((data && data.error) || `Request failed (${res.status}). Please try again.`);
+            }
+            return data;
+        }
+
+        function setProducts(list) {
+            products = list;
+            productsLoaded = true;
+            productsError = null;
+            // Drop cart lines for products that no longer exist and cap quantities at available stock
+            cart = cart
+                .filter(item => products.some(p => p.id === item.id))
+                .map(item => {
+                    const product = products.find(p => p.id === item.id);
+                    return { ...item, qty: Math.min(item.qty, product.stock) };
+                })
+                .filter(item => item.qty > 0);
             saveState();
             renderStorefront();
             renderAdminTable();
             updateCartUI();
-        });
+        }
 
-        // Save State to LocalStorage
+        async function loadProducts() {
+            try {
+                setProducts(await apiRequest('/api/products'));
+            } catch (err) {
+                productsError = err.message;
+                renderStorefront();
+                renderAdminTable();
+                showToast(`Could not load products: ${err.message}`, "error");
+            }
+        }
+
+        // Save cart to LocalStorage (products are persisted in the database)
         function saveState() {
-            localStorage.setItem('ch_products', JSON.stringify(products));
             localStorage.setItem('ch_cart', JSON.stringify(cart));
             updateAdminStats();
+        }
+
+        function escapeHtml(value) {
+            return String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
         }
 
         // View Navigation
@@ -324,6 +341,20 @@
             const grid = document.getElementById('storeGrid');
             const searchQuery = document.getElementById('storeSearchInput').value.toLowerCase();
 
+            if (productsError || !productsLoaded) {
+                grid.innerHTML = productsError ? `
+                    <div class="col-span-full text-center py-12 text-rose-500">
+                        <i class="fa-solid fa-circle-exclamation text-4xl mb-3"></i>
+                        <p class="text-sm">Could not load products: ${escapeHtml(productsError)}</p>
+                        <button onclick="loadProducts()" class="mt-4 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold px-4 py-2 rounded-xl transition">Try Again</button>
+                    </div>` : `
+                    <div class="col-span-full text-center py-12 text-slate-400">
+                        <i class="fa-solid fa-spinner fa-spin text-4xl mb-3"></i>
+                        <p class="text-sm">Loading products...</p>
+                    </div>`;
+                return;
+            }
+
             const filtered = products.filter(p => {
                 const matchesCat = activeCategory === 'all' || p.category === activeCategory;
                 const matchesSearch = p.title.toLowerCase().includes(searchQuery);
@@ -343,11 +374,11 @@
                 <div class="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm hover:shadow-md transition flex flex-col justify-between">
                     <div>
                         <div class="h-48 w-full bg-slate-100 overflow-hidden relative">
-                            <img src="${product.image}" alt="${product.title}" class="w-full h-full object-cover" onerror="this.src='https://placehold.co/400x300/e2e8f0/64748b?text=Product'">
-                            <span class="absolute top-3 right-3 bg-white/90 backdrop-blur-md text-slate-700 text-xs font-semibold px-2.5 py-1 rounded-full border border-slate-200">${product.category}</span>
+                            <img src="${escapeHtml(product.image)}" alt="${escapeHtml(product.title)}" class="w-full h-full object-cover" onerror="this.src='https://placehold.co/400x300/e2e8f0/64748b?text=Product'">
+                            <span class="absolute top-3 right-3 bg-white/90 backdrop-blur-md text-slate-700 text-xs font-semibold px-2.5 py-1 rounded-full border border-slate-200">${escapeHtml(product.category)}</span>
                         </div>
                         <div class="p-5">
-                            <h3 class="font-bold text-slate-900 text-base mb-1 truncate">${product.title}</h3>
+                            <h3 class="font-bold text-slate-900 text-base mb-1 truncate">${escapeHtml(product.title)}</h3>
                             <div class="text-xs text-slate-500 mb-3">In Stock: ${product.stock}</div>
                             <div class="text-xl font-extrabold text-indigo-600">$${parseFloat(product.price).toFixed(2)}</div>
                         </div>
@@ -430,9 +461,9 @@
 
                     return `
                         <div class="flex items-center gap-4 bg-slate-50 p-3 rounded-xl border border-slate-100">
-                            <img src="${product.image}" class="w-14 h-14 object-cover rounded-lg bg-slate-200" onerror="this.src='https://placehold.co/100?text=Item'">
+                            <img src="${escapeHtml(product.image)}" class="w-14 h-14 object-cover rounded-lg bg-slate-200" onerror="this.src='https://placehold.co/100?text=Item'">
                             <div class="flex-grow">
-                                <h4 class="font-bold text-slate-800 text-sm truncate">${product.title || 'Product'}</h4>
+                                <h4 class="font-bold text-slate-800 text-sm truncate">${escapeHtml(product.title || 'Product')}</h4>
                                 <div class="text-xs text-indigo-600 font-semibold">$${parseFloat(product.price || 0).toFixed(2)}</div>
                                 <div class="flex items-center gap-2 mt-2">
                                     <button onclick="updateCartQuantity('${item.id}', -1)" class="w-6 h-6 bg-white border border-slate-200 rounded text-slate-600 text-xs hover:bg-slate-100">-</button>
@@ -451,32 +482,47 @@
             subtotalEl.innerText = `$${subtotal.toFixed(2)}`;
         }
 
-        function checkoutCart() {
+        let checkoutInProgress = false;
+
+        async function checkoutCart() {
             if (cart.length === 0) {
                 showToast("Your cart is empty!", "warning");
                 return;
             }
+            if (checkoutInProgress) return;
+            checkoutInProgress = true;
 
-            // Deduct stock locally
-            cart.forEach(cartItem => {
-                const prod = products.find(p => p.id === cartItem.id);
-                if (prod) {
-                    prod.stock = Math.max(0, prod.stock - cartItem.qty);
-                }
-            });
+            try {
+                // Server verifies products and stock, then deducts stock in the database
+                const updatedProducts = await apiRequest('/api/checkout', {
+                    method: 'POST',
+                    body: JSON.stringify({ items: cart.map(item => ({ id: item.id, qty: item.qty })) })
+                });
 
-            cart = [];
-            saveState();
-            updateCartUI();
-            renderStorefront();
-            renderAdminTable();
-            toggleCartModal(false);
-            showToast("Order placed successfully! Thank you.");
+                cart = [];
+                setProducts(updatedProducts);
+                toggleCartModal(false);
+                showToast("Order placed successfully! Thank you.");
+            } catch (err) {
+                showToast(`Checkout failed: ${err.message}`, "error");
+                // Refresh inventory so the cart reflects current stock
+                loadProducts();
+            } finally {
+                checkoutInProgress = false;
+            }
         }
 
         // --- ADMIN DASHBOARD FUNCTIONS ---
         function renderAdminTable() {
             const tbody = document.getElementById('adminTableBody');
+
+            if (productsError || !productsLoaded) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="5" class="text-center py-8 ${productsError ? 'text-rose-500' : 'text-slate-400'}">${productsError ? `Could not load inventory: ${escapeHtml(productsError)}` : 'Loading inventory...'}</td>
+                    </tr>`;
+                return;
+            }
 
             if (products.length === 0) {
                 tbody.innerHTML = `
@@ -489,10 +535,10 @@
             tbody.innerHTML = products.map(p => `
                 <tr class="hover:bg-slate-50 transition">
                     <td class="py-3.5 px-6 font-medium text-slate-900 flex items-center gap-3">
-                        <img src="${p.image}" class="w-10 h-10 rounded-lg object-cover bg-slate-100" onerror="this.src='https://placehold.co/100?text=Item'">
-                        <span>${p.title}</span>
+                        <img src="${escapeHtml(p.image)}" class="w-10 h-10 rounded-lg object-cover bg-slate-100" onerror="this.src='https://placehold.co/100?text=Item'">
+                        <span>${escapeHtml(p.title)}</span>
                     </td>
-                    <td class="py-3.5 px-6"><span class="px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-700">${p.category}</span></td>
+                    <td class="py-3.5 px-6"><span class="px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-700">${escapeHtml(p.category)}</span></td>
                     <td class="py-3.5 px-6 font-semibold text-slate-800">$${parseFloat(p.price).toFixed(2)}</td>
                     <td class="py-3.5 px-6">
                         <span class="${p.stock < 5 ? 'text-amber-600 font-bold' : 'text-slate-600'}">${p.stock} units</span>
@@ -543,7 +589,7 @@
             openProductModal(true);
         }
 
-        function handleProductSubmit(e) {
+        async function handleProductSubmit(e) {
             e.preventDefault();
 
             const id = document.getElementById('productId').value;
@@ -553,41 +599,39 @@
             const stock = parseInt(document.getElementById('productStock').value);
             const image = document.getElementById('productImage').value;
 
-            if (id) {
-                // Update Existing
-                const index = products.findIndex(p => p.id === id);
-                if (index !== -1) {
-                    products[index] = { id, title, category, price, stock, image };
-                    showToast("Product updated successfully.");
-                }
-            } else {
-                // Create New
-                const newProduct = {
-                    id: Date.now().toString(),
-                    title,
-                    category,
-                    price,
-                    stock,
-                    image
-                };
-                products.push(newProduct);
-                showToast("New product added to inventory.");
-            }
+            const submitBtn = e.submitter || e.target.querySelector('[type="submit"]');
+            if (submitBtn) submitBtn.disabled = true;
 
-            saveState();
-            renderStorefront();
-            renderAdminTable();
-            closeProductModal();
+            try {
+                const payload = JSON.stringify({ title, category, price, stock, image });
+                if (id) {
+                    // Update Existing
+                    const updated = await apiRequest(`/api/products/${encodeURIComponent(id)}`, { method: 'PUT', body: payload });
+                    setProducts(products.map(p => p.id === id ? updated : p));
+                    showToast("Product updated successfully.");
+                } else {
+                    // Create New
+                    const created = await apiRequest('/api/products', { method: 'POST', body: payload });
+                    setProducts([...products, created]);
+                    showToast("New product added to inventory.");
+                }
+                closeProductModal();
+            } catch (err) {
+                // Keep the modal open so the entered data is not lost
+                showToast(`Could not save product: ${err.message}`, "error");
+            } finally {
+                if (submitBtn) submitBtn.disabled = false;
+            }
         }
 
-        function deleteProduct(id) {
-            products = products.filter(p => p.id !== id);
-            cart = cart.filter(c => c.id !== id);
-            saveState();
-            renderStorefront();
-            renderAdminTable();
-            updateCartUI();
-            showToast("Product deleted.", "warning");
+        async function deleteProduct(id) {
+            try {
+                await apiRequest(`/api/products/${encodeURIComponent(id)}`, { method: 'DELETE' });
+                setProducts(products.filter(p => p.id !== id));
+                showToast("Product deleted.", "warning");
+            } catch (err) {
+                showToast(`Could not delete product: ${err.message}`, "error");
+            }
         }
 
         // --- UTILS ---
@@ -597,7 +641,9 @@
             const toastIcon = document.getElementById('toastIcon');
 
             toastMsg.innerText = message;
-            if (type === "warning") {
+            if (type === "error") {
+                toastIcon.className = "fa-solid fa-circle-exclamation text-rose-400";
+            } else if (type === "warning") {
                 toastIcon.className = "fa-solid fa-triangle-exclamation text-amber-400";
             } else {
                 toastIcon.className = "fa-solid fa-circle-check text-emerald-400";
